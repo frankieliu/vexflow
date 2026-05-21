@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Jianpu to VexFlow Renderer</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', sans-serif;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        h1 {
+            text-align: center;
+            color: #333;
+        }
+        .score-container {
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            max-width: 1000px;
+            margin: 0 auto;
+        }
+        .line-container {
+            margin-bottom: 20px;
+        }
+        .line-label {
+            font-weight: bold;
+            margin-bottom: 5px;
+            color: #666;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+    <h1>Jianpu (简谱) to Western Notation</h1>
+    <p style="text-align: center; color: #666;">Transposed to <strong id="keyDisplay">G Major</strong> &nbsp;|&nbsp; <span id="mappingDisplay">1=G, 2=A, 3=B, 4=C, 5=D, 6=E, 7=F#</span></p>
+    <div class="score-container">
+        <div id="score"></div>
+    </div>
+
+    <script src="./build/cjs/vexflow.js"></script>
+    <script>
+        // VexFlow CJS build assigns default export to window.Vex
+        const { Renderer, Stave, StaveNote, Voice, Formatter, Accidental, Beam, BarlineType } = Vex.Flow;
+
+        // Transposition settings
+        const TRANSPOSE_TO_KEY = 'G';
+
+        // Jianpu to Western note mappings for different keys
+        const keyMappings = {
+            'C': { 1: 'c', 2: 'd', 3: 'e', 4: 'f', 5: 'g', 6: 'a', 7: 'b' },
+            'G': { 1: 'g', 2: 'a', 3: 'b', 4: 'c', 5: 'd', 6: 'e', 7: 'f#' },
+            'D': { 1: 'd', 2: 'e', 3: 'f#', 4: 'g', 5: 'a', 6: 'b', 7: 'c#' },
+            'A': { 1: 'a', 2: 'b', 3: 'c#', 4: 'd', 5: 'e', 6: 'f#', 7: 'g#' },
+            'F': { 1: 'f', 2: 'g', 3: 'a', 4: 'bb', 5: 'c', 6: 'd', 7: 'e' },
+            'Bb': { 1: 'bb', 2: 'c', 3: 'd', 4: 'eb', 5: 'f', 6: 'g', 7: 'a' },
+        };
+
+        const currentKey = keyMappings[TRANSPOSE_TO_KEY] || keyMappings['C'];
+
+        // Build jianpuToNote from current key
+        const jianpuToNote = {};
+        for (let i = 1; i <= 7; i++) {
+            const note = currentKey[i];
+            jianpuToNote[i.toString()] = note.replace('#', '').replace('b', '');
+        }
+
+        // Get the proper octave offset for notes in the current key
+        function getOctaveOffset(jianpuNum) {
+            const num = parseInt(jianpuNum);
+            if (TRANSPOSE_TO_KEY === 'G') {
+                return (num >= 4) ? 1 : 0;
+            } else if (TRANSPOSE_TO_KEY === 'D') {
+                return (num >= 7) ? 1 : 0;
+            } else if (TRANSPOSE_TO_KEY === 'F') {
+                return (num >= 5) ? 1 : 0;
+            }
+            return 0;
+        }
+
+        // Base octave for the key (where jianpu "1" sits)
+        // In G major: G4-A4-B4-C5-D5-E5-F#5
+        const baseOctave = 4;
+
+        // Render jianpu with VexFlow staff
+        function renderJianpuWithStaff(containerId, label, jianpuNotation) {
+            const container = document.getElementById(containerId);
+
+            const lineContainer = document.createElement('div');
+            lineContainer.className = 'line-container';
+            container.appendChild(lineContainer);
+
+            const labelDiv = document.createElement('div');
+            labelDiv.className = 'line-label';
+            labelDiv.textContent = label;
+            lineContainer.appendChild(labelDiv);
+
+            const svgContainer = document.createElement('div');
+            lineContainer.appendChild(svgContainer);
+
+            const renderer = new Renderer(svgContainer, Renderer.Backends.SVG);
+            renderer.resize(950, 180);
+            const context = renderer.getContext();
+
+            const measures = jianpuNotation.split('|').filter(m => m.trim() && m.trim() !== '|');
+
+            let x = 10;
+            const measureWidth = Math.min(220, (950 - 20) / measures.length);
+
+            measures.forEach((measure, idx) => {
+                const stave = new Stave(x, 50, measureWidth);
+
+                if (idx === 0) {
+                    stave.addClef('treble');
+                    stave.addKeySignature(TRANSPOSE_TO_KEY);
+                }
+
+                const isLast = idx === measures.length - 1;
+                const isDoubleBar = jianpuNotation.includes('||') && isLast;
+
+                if (isDoubleBar) {
+                    stave.setEndBarType(BarlineType.END);
+                }
+
+                stave.setContext(context).draw();
+
+                const beatGroups = measure.trim().split(/\s{2,}/);
+                const allNotes = [];
+                const beamGroups = [];
+
+                beatGroups.forEach(group => {
+                    const items = group.trim().split(/\s+/).filter(i => i && i !== '-');
+                    const currentBeamGroup = [];
+
+                    items.forEach(item => {
+                        if (item === '-') return;
+
+                        let explicitAccidental = null;
+                        let i = 0;
+
+                        if (item[i] === '#') {
+                            explicitAccidental = '#';
+                            i++;
+                        } else if (item[i] === 'b' && item.length > 1 && /[0-7]/.test(item[i+1])) {
+                            explicitAccidental = 'b';
+                            i++;
+                        }
+
+                        const noteNum = item[i];
+                        if (!noteNum || !jianpuToNote[noteNum]) return;
+
+                        i++;
+
+                        // Check for lower octave dot
+                        let octave = baseOctave + getOctaveOffset(noteNum);
+                        if (i < item.length && item[i] === '.') {
+                            octave -= 1;
+                            i++;
+                        }
+
+                        // Check for underscore (eighth note indicator)
+                        const isEighth = item.includes('_');
+                        const duration = isEighth ? '8' : 'q';
+
+                        const staveNote = new StaveNote({
+                            keys: [`${jianpuToNote[noteNum]}/${octave}`],
+                            duration: duration
+                        });
+
+                        if (explicitAccidental) {
+                            staveNote.addModifier(new Accidental(explicitAccidental));
+                        }
+
+                        allNotes.push(staveNote);
+
+                        if (isEighth) {
+                            currentBeamGroup.push(staveNote);
+                        }
+                    });
+
+                    if (currentBeamGroup.length >= 2) {
+                        beamGroups.push([...currentBeamGroup]);
+                    }
+                });
+
+                if (allNotes.length > 0) {
+                    try {
+                        const voice = new Voice({ num_beats: 4, beat_value: 4 }).setStrict(false);
+                        voice.addTickables(allNotes);
+
+                        new Formatter().joinVoices([voice]).format([voice], measureWidth - 40);
+                        voice.draw(context, stave);
+
+                        beamGroups.forEach(beamNotes => {
+                            try {
+                                const beam = new Beam(beamNotes);
+                                beam.setContext(context).draw();
+                            } catch (e) {
+                                // Skip beaming errors
+                            }
+                        });
+                    } catch (e) {
+                        console.log('Render error:', e);
+                    }
+                }
+
+                x += measureWidth;
+            });
+        }
+
+        // Update displays
+        document.getElementById('keyDisplay').textContent = TRANSPOSE_TO_KEY + ' Major';
+        const mappingStr = [1,2,3,4,5,6,7].map(n => `${n}=${currentKey[n].toUpperCase()}`).join(', ');
+        document.getElementById('mappingDisplay').textContent = mappingStr;
+
+        // Music data
+        const music = [
+            { label: "Line 1", notation: "3._ 4._ | 5._ 6._ 7._  1_ 1 2_ | 3 3 4  3. 2_ | 1_ 1_ 6.  1 1 1 | 5. - -" },
+            { label: "Line 2", notation: "3._ 4._ | 5._ 6._ 7._  1_ 1 2_ | 3 3 4  3. 3_ | 3_ 2_ 2_  #4_ 4_ 2_ | 5. - -" },
+            { label: "Line 3 (Chorus)", notation: "5_ | 3_ 3_ 1_  3_ 3_ 1_ | 3 - - 2_ | 1_ 1_ 6.  1 1 1 | 5. - -" },
+            { label: "Line 4", notation: "3._ 4._ | 5._ 6._ 7._  1_ 1 2_ | 3 3 4  5 4 | 3_ 3_ 1_  3_ 3_ 2_ | 1 - - ||" }
+        ];
+
+        // Render all lines
+        music.forEach((line) => {
+            renderJianpuWithStaff('score', line.label, line.notation);
+        });
+    </script>
+</body>
+</html>
